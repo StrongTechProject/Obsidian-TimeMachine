@@ -1,19 +1,23 @@
 """
-Cron scheduler management for Obsidian Timemachine.
+Scheduler management for Obsidian Timemachine.
 
-Provides functions for managing cron jobs to automate sync.
+Unified interface for managing background sync tasks.
+Supports:
+- macOS: LaunchAgents (native, reliable wake-up)
+- Linux/Other: Cron (standard)
 """
 
 from __future__ import annotations
 
-import re
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from .logger import get_logger
 
+# Import OS-specific handler
+if sys.platform == "darwin":
+    from . import launchd_ops
 
 # Common schedule presets
 SCHEDULE_PRESETS = {
@@ -25,267 +29,66 @@ SCHEDULE_PRESETS = {
     "daily_evening": "0 22 * * *",
 }
 
-
-@dataclass
-class CronJob:
-    """Represents a cron job entry.
-    
-    Attributes:
-        schedule: Cron schedule expression.
-        command: Command to execute.
-        comment: Optional comment/identifier.
-    """
-    schedule: str
-    command: str
-    comment: str | None = None
-    
-    def to_cron_line(self) -> str:
-        """Convert to cron entry line."""
-        if self.comment:
-            return f"{self.schedule} {self.command} # {self.comment}"
-        return f"{self.schedule} {self.command}"
-    
-    @classmethod
-    def from_cron_line(cls, line: str) -> "CronJob | None":
-        """Parse a cron line into a CronJob object."""
-        line = line.strip()
-        if not line or line.startswith("#"):
-            return None
-        
-        # Extract comment if present
-        comment = None
-        if "#" in line:
-            line, comment = line.rsplit("#", 1)
-            line = line.strip()
-            comment = comment.strip()
-        
-        # Parse schedule and command
-        parts = line.split(None, 5)
-        if len(parts) < 6:
-            return None
-        
-        schedule = " ".join(parts[:5])
-        command = parts[5]
-        
-        return cls(schedule=schedule, command=command, comment=comment)
+# Launchd preset mappings (Label suffix, Interval/Calendar)
+LAUNCHD_LABEL = "com.user.ot.sync"
+LAUNCHD_PRESETS = {
+    "15min": {"schedule_interval": 900},
+    "30min": {"schedule_interval": 1800},
+    "hourly": {"schedule_interval": 3600},
+    "daily": {"calendar_interval": {"Hour": 2, "Minute": 0}},
+    "daily_morning": {"calendar_interval": {"Hour": 9, "Minute": 0}},
+    "daily_evening": {"calendar_interval": {"Hour": 22, "Minute": 0}},
+}
 
 
-def get_current_crontab() -> str:
-    """Get the current user's crontab contents.
-    
-    Returns:
-        Crontab contents as string, empty string if none.
-    """
-    try:
-        result = subprocess.run(
-            ["crontab", "-l"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        
-        if result.returncode == 0:
-            return result.stdout
-        
-        # No crontab is not an error
-        if "no crontab" in result.stderr.lower():
-            return ""
-        
-        return ""
-    except (subprocess.SubprocessError, OSError):
-        return ""
+# ============================================================================
+# Shared / Legacy Interface
+# ============================================================================
 
-
-def set_crontab(content: str) -> bool:
-    """Set the user's crontab contents.
-    
-    Args:
-        content: New crontab contents.
-        
-    Returns:
-        True if successful.
-    """
+def add_sync_schedule(schedule: str, config_path: Path | None = None) -> bool:
+    """Add a sync schedule (Cross-platform)."""
     logger = get_logger()
     
-    try:
-        result = subprocess.run(
-            ["crontab", "-"],
-            input=content,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        
-        if result.returncode == 0:
-            return True
-        
-        logger.error(f"❌ Failed to set crontab: {result.stderr}")
-        return False
-    except subprocess.SubprocessError as e:
-        logger.error(f"❌ Failed to set crontab: {e}")
-        return False
-
-
-def find_ot_cron_jobs() -> list[CronJob]:
-    """Find existing OT sync cron jobs.
-    
-    Returns:
-        List of CronJob objects for OT.
-    """
-    crontab = get_current_crontab()
-    jobs: list[CronJob] = []
-    
-    for line in crontab.splitlines():
-        # Look for lines containing 'ot sync' or 'ot-sync'
-        if "ot sync" in line.lower() or "ot-sync" in line.lower():
-            job = CronJob.from_cron_line(line)
-            if job:
-                jobs.append(job)
-    
-    return jobs
-
-
-def get_ot_command() -> str:
-    """Get the full path to the ot command.
-    
-    Returns:
-        Path to ot command.
-    """
-    # Try to find ot in PATH
-    try:
-        result = subprocess.run(
-            ["which", "ot"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-    except subprocess.SubprocessError:
-        pass
-    
-    # Fallback to sys.executable based path
-    return f"{sys.executable} -m ot.cli.main"
-
-
-def add_sync_schedule(
-    schedule: str,
-    config_path: Path | None = None,
-) -> bool:
-    """Add a cron job for sync.
-    
-    Args:
-        schedule: Cron schedule expression or preset name.
-        config_path: Optional config file path.
-        
-    Returns:
-        True if successful.
-    """
-    logger = get_logger()
-    
-    # Resolve schedule preset
-    if schedule in SCHEDULE_PRESETS:
-        cron_schedule = SCHEDULE_PRESETS[schedule]
+    if sys.platform == "darwin":
+        return _add_launchd_schedule(schedule, config_path)
     else:
-        cron_schedule = schedule
-    
-    # Validate cron expression (basic check)
-    parts = cron_schedule.split()
-    if len(parts) != 5:
-        logger.error(f"❌ Invalid cron schedule: {cron_schedule}")
-        return False
-    
-    # Build command
-    ot_cmd = get_ot_command()
-    command = f"{ot_cmd} sync"
-    if config_path:
-        command += f" --config {config_path}"
-    
-    # Remove existing OT jobs
-    crontab = get_current_crontab()
-    new_lines = []
-    
-    for line in crontab.splitlines():
-        # Skip existing OT sync jobs
-        if "ot sync" in line.lower() or "ot-sync" in line.lower():
-            continue
-        new_lines.append(line)
-    
-    # Add new job
-    new_job = CronJob(
-        schedule=cron_schedule,
-        command=command,
-        comment="Obsidian Timemachine auto-sync",
-    )
-    new_lines.append(new_job.to_cron_line())
-    
-    # Ensure trailing newline
-    new_crontab = "\n".join(new_lines)
-    if not new_crontab.endswith("\n"):
-        new_crontab += "\n"
-    
-    if set_crontab(new_crontab):
-        logger.info(f"✅ Cron job added: {cron_schedule}")
-        return True
-    
-    return False
+        return _add_cron_schedule(schedule, config_path)
 
 
 def remove_sync_schedule() -> bool:
-    """Remove all OT sync cron jobs.
-    
-    Returns:
-        True if successful.
-    """
-    logger = get_logger()
-    
-    crontab = get_current_crontab()
-    new_lines = []
-    removed_count = 0
-    
-    for line in crontab.splitlines():
-        if "ot sync" in line.lower() or "ot-sync" in line.lower():
-            removed_count += 1
-            continue
-        new_lines.append(line)
-    
-    if removed_count == 0:
-        logger.info("No OT sync jobs found in crontab.")
-        return True
-    
-    new_crontab = "\n".join(new_lines)
-    if new_crontab and not new_crontab.endswith("\n"):
-        new_crontab += "\n"
-    
-    if set_crontab(new_crontab):
-        logger.info(f"✅ Removed {removed_count} OT sync job(s)")
-        return True
-    
-    return False
+    """Remove sync schedule (Cross-platform)."""
+    if sys.platform == "darwin":
+        # Also clean legacy cron jobs just in case
+        _remove_cron_schedule()
+        return launchd_ops.remove_agent(LAUNCHD_LABEL)
+    else:
+        return _remove_cron_schedule()
 
 
 def get_current_schedule() -> str | None:
-    """Get the current OT sync schedule.
-    
-    Returns:
-        Cron schedule expression or None if not scheduled.
-    """
-    jobs = find_ot_cron_jobs()
-    if jobs:
-        return jobs[0].schedule
-    return None
+    """Get current schedule (Cross-platform)."""
+    if sys.platform == "darwin":
+        # Retrieve from plist checks? 
+        # For simplicity, we check if the plist exists and return a generic "Enabled (Launchd)" 
+        # or try to reverse-engineer the interval.
+        # Since we use a fixed label, checking existence is easy.
+        # Reading the content to exact preset is harder but doable.
+        if launchd_ops._get_plist_path(LAUNCHD_LABEL).exists():
+            return "Enabled (macOS Native)" 
+        return None
+    else:
+        jobs = find_ot_cron_jobs()
+        if jobs:
+            return jobs[0].schedule
+        return None
 
 
 def describe_schedule(schedule: str) -> str:
-    """Get a human-readable description of a cron schedule.
-    
-    Args:
-        schedule: Cron schedule expression.
+    """Describe schedule human-readably."""
+    if schedule == "Enabled (macOS Native)":
+        return "Active (MacOS Native Scheduler)"
         
-    Returns:
-        Human-readable description.
-    """
-    # Check presets first
+    # Reuse existing description logic
     for name, expr in SCHEDULE_PRESETS.items():
         if schedule == expr:
             descriptions = {
@@ -297,30 +100,139 @@ def describe_schedule(schedule: str) -> str:
                 "daily_evening": "Daily at 10:00 PM",
             }
             return descriptions.get(name, name)
+            
+    return schedule
+
+
+# ============================================================================
+# MacOS Launchd Impl
+# ============================================================================
+
+def _add_launchd_schedule(schedule: str, config_path: Path | None = None) -> bool:
+    """Add macOS LaunchAgent."""
+    logger = get_logger()
     
-    # Parse cron expression
+    # 1. Map schedule string to config
+    launch_config = {}
+    
+    if schedule in LAUNCHD_PRESETS:
+        launch_config = LAUNCHD_PRESETS[schedule]
+    else:
+        # Fallback/Error for custom cron expressions not supported in basic launchd mapping yet
+        logger.error("❌ MacOS currently only supports presets: 15min, 30min, hourly, daily")
+        return False
+        
+    # 2. Build Command
+    # Must use absolute path to python/ot
+    ot_cmd_list = _get_ot_command_list()
+    if not ot_cmd_list:
+        logger.error("❌ Could not determine command for LaunchAgent")
+        return False
+        
+    cmd_args = ot_cmd_list + ["sync"]
+    if config_path:
+        cmd_args.extend(["--config", str(config_path)])
+        
+    # 3. Create Plist
+    # Clean legacy cron first
+    _remove_cron_schedule()
+    
+    content = launchd_ops.create_plist_content(
+        label=LAUNCHD_LABEL,
+        program_args=cmd_args,
+        schedule_interval=launch_config.get("schedule_interval"),
+        calendar_interval=launch_config.get("calendar_interval"),
+        stdout_path="/tmp/ot_sync.out.log", # Optional: redirect for debug
+        stderr_path="/tmp/ot_sync.err.log"
+    )
+    
+    return launchd_ops.install_agent(LAUNCHD_LABEL, content)
+
+
+def _get_ot_command_list() -> list[str]:
+    """Get command as list for exec."""
+    # Preferred: direct executable
+    # But for python module, we want [python_exe, "-m", "ot.cli.main"]
+    return [sys.executable, "-m", "ot.cli.main"]
+
+
+# ============================================================================
+# Legacy / Linux Cron Impl (Keep existing logic private)
+# ============================================================================
+
+@dataclass
+class CronJob:
+    """Represents a cron job entry."""
+    schedule: str
+    command: str
+    comment: str | None = None
+    
+    def to_cron_line(self) -> str:
+        if self.comment:
+            return f"{self.schedule} {self.command} # {self.comment}"
+        return f"{self.schedule} {self.command}"
+    
+    @classmethod
+    def from_cron_line(cls, line: str) -> "CronJob | None":
+        line = line.strip()
+        if not line or line.startswith("#"):
+            return None
+        comment = None
+        if "#" in line:
+            line, comment = line.rsplit("#", 1)
+            line = line.strip()
+            comment = comment.strip()
+        parts = line.split(None, 5)
+        if len(parts) < 6:
+            return None
+        return cls(schedule=" ".join(parts[:5]), command=parts[5], comment=comment)
+
+import subprocess
+
+def _get_current_crontab() -> str:
     try:
-        parts = schedule.split()
-        if len(parts) != 5:
-            return schedule
-        
-        minute, hour, dom, month, dow = parts
-        
-        if minute.startswith("*/"):
-            interval = minute[2:]
-            return f"Every {interval} minutes"
-        
-        if minute == "0" and hour == "*":
-            return "Every hour"
-        
-        if minute == "0" and hour.isdigit():
-            h = int(hour)
-            period = "AM" if h < 12 else "PM"
-            h12 = h if h <= 12 else h - 12
-            if h12 == 0:
-                h12 = 12
-            return f"Daily at {h12}:00 {period}"
-        
-        return schedule
-    except Exception:
-        return schedule
+        result = subprocess.run(["crontab", "-l"], capture_output=True, text=True, timeout=10)
+        if result.returncode == 0: return result.stdout
+        return ""
+    except Exception: return ""
+
+def _set_crontab(content: str) -> bool:
+    try:
+        subprocess.run(["crontab", "-"], input=content, capture_output=True, text=True, timeout=10)
+        return True
+    except Exception: return False
+
+def find_ot_cron_jobs() -> list[CronJob]:
+    crontab = _get_current_crontab()
+    jobs = []
+    for line in crontab.splitlines():
+        if "ot sync" in line.lower() or "ot-sync" in line.lower():
+            job = CronJob.from_cron_line(line)
+            if job: jobs.append(job)
+    return jobs
+
+def _add_cron_schedule(schedule: str, config_path: Path | None) -> bool:
+    # (Simplified from original)
+    logger = get_logger()
+    cron_schedule = SCHEDULE_PRESETS.get(schedule, schedule)
+    
+    # Simple validation
+    if len(cron_schedule.split()) != 5: return False
+    
+    ot_cmd = f"{sys.executable} -m ot.cli.main"
+    command = f"{ot_cmd} sync"
+    if config_path: command += f" --config {config_path}"
+    
+    crontab = _get_current_crontab()
+    new_lines = [line for line in crontab.splitlines() 
+                 if "ot sync" not in line.lower() and "ot-sync" not in line.lower()]
+    
+    job = CronJob(schedule=cron_schedule, command=command, comment="Obsidian Timemachine auto-sync")
+    new_lines.append(job.to_cron_line())
+    return _set_crontab("\n".join(new_lines) + "\n")
+
+def _remove_cron_schedule() -> bool:
+    crontab = _get_current_crontab()
+    new_lines = [line for line in crontab.splitlines() 
+                 if "ot sync" not in line.lower() and "ot-sync" not in line.lower()]
+    return _set_crontab("\n".join(new_lines) + "\n")
