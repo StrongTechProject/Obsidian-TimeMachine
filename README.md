@@ -87,10 +87,34 @@ ot sync
 
 ## Usage
 
-### Commands
+### Interactive Menu (Recommended)
+
+```bash
+ot menu
+```
+
+This opens an interactive menu for all operations:
+
+```
+╔══════════════════════════════════════════════════╗
+║         Obsidian Timemachine - Menu              ║
+╚══════════════════════════════════════════════════╝
+
+  1. 🔄 Run Sync Now
+  2. 📋 View Full Status
+  3. ⏰ Manage Schedule
+  4. ⚙️  Run Setup Wizard
+  5. 📁 View Logs
+  6. ❌ Exit
+```
+
+### Command Line (Advanced)
+
+For scripting or quick access, you can use direct commands:
 
 | Command | Description |
 |---------|-------------|
+| `ot menu` | Open interactive menu |
 | `ot sync` | Run backup (pull → sync → commit → push) |
 | `ot status` | Check configuration and sync status |
 | `ot setup` | Interactive configuration wizard |
@@ -98,17 +122,17 @@ ot sync
 | `ot schedule show` | Show current schedule |
 | `ot schedule remove` | Disable auto-sync |
 
-### Examples
+### Quick Examples
 
 ```bash
-# Run a manual sync
+# Open interactive menu
+ot menu
+
+# Run a manual sync directly
 ot sync
 
 # Enable auto-sync every 15 minutes
 ot schedule set 15min
-
-# Check current status
-ot status
 ```
 
 ## Configuration
