@@ -8,11 +8,9 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
-from typing import Callable
 
-from .config import Config, ConfigError, load_config, validate_config
+from .config import Config, load_config, validate_config
 from .git_ops import (
     GitResult,
     commit_and_push,

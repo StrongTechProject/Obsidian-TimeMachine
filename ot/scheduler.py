@@ -9,6 +9,7 @@ Supports:
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,7 +48,6 @@ LAUNCHD_PRESETS = {
 
 def add_sync_schedule(schedule: str, config_path: Path | None = None) -> bool:
     """Add a sync schedule (Cross-platform)."""
-    logger = get_logger()
     
     if sys.platform == "darwin":
         return _add_launchd_schedule(schedule, config_path)
@@ -187,7 +187,6 @@ class CronJob:
             return None
         return cls(schedule=" ".join(parts[:5]), command=parts[5], comment=comment)
 
-import subprocess
 
 def _get_current_crontab() -> str:
     try:

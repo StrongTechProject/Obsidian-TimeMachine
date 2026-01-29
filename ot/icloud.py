@@ -9,7 +9,6 @@ and modern "dataless" (evicted) files.
 from __future__ import annotations
 
 import os
-import stat
 import subprocess
 import time
 from datetime import datetime, timedelta

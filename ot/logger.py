@@ -11,7 +11,6 @@ import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TextIO
 
 
 # Module-level logger

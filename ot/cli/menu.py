@@ -6,8 +6,6 @@ Provides a TUI-style menu for common operations.
 
 from __future__ import annotations
 
-import sys
-
 import click
 
 from ..config import load_config, ConfigError, DEFAULT_CONFIG_FILE

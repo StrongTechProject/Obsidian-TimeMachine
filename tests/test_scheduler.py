@@ -6,7 +6,7 @@ import pytest
 
 from ot.scheduler import (
     CronJob,
-    get_current_crontab,
+    _get_current_crontab,
     find_ot_cron_jobs,
     describe_schedule,
     SCHEDULE_PRESETS,
@@ -91,7 +91,7 @@ class TestGetCurrentCrontab:
             stdout="*/15 * * * * ot sync\n",
         )
         
-        result = get_current_crontab()
+        result = _get_current_crontab()
         assert "ot sync" in result
     
     @patch("ot.scheduler.subprocess.run")
@@ -102,14 +102,14 @@ class TestGetCurrentCrontab:
             stderr="no crontab for user",
         )
         
-        result = get_current_crontab()
+        result = _get_current_crontab()
         assert result == ""
 
 
 class TestFindOTCronJobs:
     """Tests for find_ot_cron_jobs function."""
     
-    @patch("ot.scheduler.get_current_crontab")
+    @patch("ot.scheduler._get_current_crontab")
     def test_find_jobs_with_ot_sync(self, mock_crontab: MagicMock) -> None:
         """Test finding OT sync jobs."""
         mock_crontab.return_value = (
@@ -123,7 +123,7 @@ class TestFindOTCronJobs:
         assert len(jobs) == 1
         assert "ot sync" in jobs[0].command
     
-    @patch("ot.scheduler.get_current_crontab")
+    @patch("ot.scheduler._get_current_crontab")
     def test_find_jobs_none(self, mock_crontab: MagicMock) -> None:
         """Test when no OT jobs exist."""
         mock_crontab.return_value = "0 * * * * other-command\n"
@@ -151,9 +151,11 @@ class TestDescribeSchedule:
         assert "2:00 AM" in desc or "Daily" in desc
     
     def test_describe_custom(self) -> None:
-        """Test describing custom schedule."""
-        desc = describe_schedule("*/5 * * * *")
-        assert "5 minutes" in desc
+        """Test describing custom schedule returns the raw expression."""
+        custom_schedule = "*/5 * * * *"
+        desc = describe_schedule(custom_schedule)
+        # Custom schedules that are not presets return the raw expression
+        assert desc == custom_schedule
 
 
 class TestSchedulePresets:

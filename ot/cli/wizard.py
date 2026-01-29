@@ -7,7 +7,6 @@ Provides a guided setup experience for first-time configuration.
 from __future__ import annotations
 
 import re
-import sys
 from pathlib import Path
 
 import click
@@ -21,13 +20,12 @@ from ..config import (
     validate_config,
 )
 from ..git_ops import (
-    get_current_branch,
     get_remote_url,
     init_repo,
     is_git_repo,
     set_remote_url,
 )
-from ..ssh import find_ssh_keys, generate_ssh_key, SSHKey
+from ..ssh import find_ssh_keys, generate_ssh_key
 
 
 def print_header(text: str) -> None:

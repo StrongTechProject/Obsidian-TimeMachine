@@ -7,7 +7,6 @@ Provides functions for finding, generating, and managing SSH keys.
 from __future__ import annotations
 
 import os
-import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
