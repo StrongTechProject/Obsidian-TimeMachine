@@ -5,6 +5,10 @@
 </p>
 
 <p align="center">
+  Unlike internal plugins, <strong>Obsidian-Timemachine</strong> runs as a system-level background process. It automatically syncs your vault (from iCloud Drive or any local path) to a Git repository and pushes changes to GitHub, ensuring your data is safe even if you never open Obsidian.
+</p>
+
+<p align="center">
   <a href="#features">Features</a> •
   <a href="#installation">Installation</a> •
   <a href="#quick-start">Quick Start</a> •
@@ -16,13 +20,16 @@
 
 ## Features
 
-- **🖥️ Modern TUI**: Clean, interactive menu interface with real-time status updates
-- **🔄 Background Automation**: Runs via Cron without opening Obsidian
-- **☁️ iCloud Compatible**: Smart detection waits for iCloud sync to complete
-- **📦 Dual Modes**: Direct Git mode or Mirror mode (rsync to separate repo)
-- **🔐 Secure**: SSH key-based authentication for GitHub/GitLab
-- **📝 Auto-commit**: Automatic timestamped commits with smart change detection
-- **⏰ Flexible Scheduling**: Native macOS LaunchAgents (15min, hourly, etc) or standard Cron
+- **🔄 Background Automation**: Runs silently via Cron or LaunchAgents. You focus on writing; we handle the saving.
+- **📦 Dual Modes**:
+    1.  **Direct Mode**: Directly manages your local vault with Git.
+    2.  **Mirror Mode (Best for iCloud)**: Uses `rsync` to mirror your iCloud vault to a separate local Git repo, preventing iCloud sync conflicts from corrupting your Git history.
+- **☁️ iCloud Compatible**: Smart detection waits for iCloud sync to complete.
+- **🖥️ Modern TUI**: Clean, interactive menu interface with real-time status updates.
+- **🔐 Secure**: Sensitive configuration (paths, SSH keys) is completely separated from the code.
+- **📝 Auto-commit**: Automatic timestamped commits with smart change detection.
+- **⏰ Flexible Scheduling**: Native macOS LaunchAgents (15min, hourly, etc) options.
+- **📋 Smart Logging**: Auto-rotates logs and keeps your system clean.
 
 ## Requirements
 
