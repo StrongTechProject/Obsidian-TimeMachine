@@ -167,6 +167,8 @@ class SyncRunner:
         Returns:
             SyncResult with operation status and details.
         """
+        from .sync_status import record_sync_result
+        
         self._errors = []
         self._warnings = []
         
@@ -174,6 +176,11 @@ class SyncRunner:
         try:
             self._setup_logging()
         except Exception as e:
+            record_sync_result(
+                success=False,
+                result_type="failed",
+                message=f"Failed to set up logging: {e}",
+            )
             return SyncResult(
                 success=False,
                 errors=[f"Failed to set up logging: {e}"],
@@ -184,6 +191,11 @@ class SyncRunner:
         
         # Step 2: Validate environment
         if not self._validate_environment():
+            record_sync_result(
+                success=False,
+                result_type="failed",
+                message=self._errors[0] if self._errors else "Validation failed",
+            )
             return SyncResult(
                 success=False,
                 errors=self._errors,
@@ -213,6 +225,11 @@ class SyncRunner:
         if rsync_result is not None and not rsync_result.success:
             error = f"Rsync failed: {rsync_result.stderr}"
             logger.error(f"❌ {error}")
+            record_sync_result(
+                success=False,
+                result_type="failed",
+                message="Rsync failed",
+            )
             return SyncResult(
                 success=False,
                 rsync_result=rsync_result,
@@ -232,6 +249,11 @@ class SyncRunner:
         if not git_result.success:
             error = f"Git operation failed: {git_result.error}"
             logger.error(f"❌ {error}")
+            record_sync_result(
+                success=False,
+                result_type="failed",
+                message="Git operation failed",
+            )
             return SyncResult(
                 success=False,
                 rsync_result=rsync_result,
@@ -241,6 +263,21 @@ class SyncRunner:
             )
         
         logger.info("=== Backup completed successfully ===")
+        
+        # Record success status
+        # Check if changes were pushed or no changes to commit
+        if "No changes" in git_result.output:
+            record_sync_result(
+                success=True,
+                result_type="no_changes",
+                message="No changes to sync",
+            )
+        else:
+            record_sync_result(
+                success=True,
+                result_type="pushed",
+                message="Changes pushed to remote",
+            )
         
         return SyncResult(
             success=True,

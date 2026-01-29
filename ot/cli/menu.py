@@ -29,6 +29,8 @@ def print_header() -> None:
 
 def print_status_summary() -> None:
     """Print a brief status summary."""
+    from ..sync_status import load_sync_status
+    
     try:
         cfg = load_config(DEFAULT_CONFIG_FILE)
         
@@ -45,11 +47,22 @@ def print_status_summary() -> None:
             else:
                 click.echo(f"   Repo: local only ({branch})")
         
+        # Show schedule frequency
         schedule = get_current_schedule()
         if schedule:
             click.echo(f"   Schedule: {describe_schedule(schedule)}")
         else:
             click.echo("   Schedule: Manual only")
+        
+        # Show last sync status
+        last_sync = load_sync_status()
+        if last_sync:
+            status_emoji = last_sync.status_emoji()
+            time_ago = last_sync.time_ago()
+            result_msg = last_sync.message
+            click.echo(f"   Last Sync: {status_emoji} {result_msg} ({time_ago})")
+        else:
+            click.echo("   Last Sync: No sync yet")
         
     except ConfigError:
         click.echo(click.style("   ⚠️ Not configured - run Setup first", fg="yellow"))
@@ -73,8 +86,9 @@ def print_menu_options() -> None:
 
 def handle_sync() -> None:
     """Handle the sync operation."""
-    click.echo()
-    click.echo(click.style("Starting sync...", fg="cyan"))
+    clear_screen()
+    print_header()
+    click.echo(click.style("🔄 Running Sync...", fg="cyan", bold=True))
     click.echo()
     
     from ..runner import run_sync
@@ -99,7 +113,8 @@ def handle_status() -> None:
     """Handle viewing full status."""
     from .main import status
     
-    click.echo()
+    clear_screen()
+    print_header()
     
     # Invoke status command
     ctx = click.Context(status)
@@ -173,7 +188,8 @@ def handle_logs() -> None:
     """Handle viewing logs."""
     from ..config import DEFAULT_LOG_DIR
     
-    click.echo()
+    clear_screen()
+    print_header()
     click.echo(click.style("📁 Log Files", fg="blue", bold=True))
     click.echo()
     
@@ -220,7 +236,8 @@ def handle_update() -> None:
         get_update_command,
     )
     
-    click.echo()
+    clear_screen()
+    print_header()
     click.echo(click.style("🔍 Checking for updates...", fg="cyan"))
     click.echo()
     

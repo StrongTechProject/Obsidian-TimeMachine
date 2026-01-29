@@ -68,14 +68,16 @@ def remove_sync_schedule() -> bool:
 def get_current_schedule() -> str | None:
     """Get current schedule (Cross-platform)."""
     if sys.platform == "darwin":
-        # Retrieve from plist checks? 
-        # For simplicity, we check if the plist exists and return a generic "Enabled (Launchd)" 
-        # or try to reverse-engineer the interval.
-        # Since we use a fixed label, checking existence is easy.
-        # Reading the content to exact preset is harder but doable.
-        if launchd_ops._get_plist_path(LAUNCHD_LABEL).exists():
-            return "Enabled (macOS Native)" 
-        return None
+        # Retrieve from plist checks
+        info = launchd_ops.get_agent_schedule_info(LAUNCHD_LABEL)
+        if info is None:
+            return None
+        
+        # Try to reverse-engineer the preset name
+        frequency = get_schedule_frequency_name(info)
+        if frequency:
+            return frequency
+        return "custom"
     else:
         jobs = find_ot_cron_jobs()
         if jobs:
@@ -83,23 +85,70 @@ def get_current_schedule() -> str | None:
         return None
 
 
+def get_schedule_frequency_name(info: dict) -> str | None:
+    """Convert schedule info to a frequency name.
+    
+    Args:
+        info: Dictionary with schedule_interval or calendar_interval.
+        
+    Returns:
+        Frequency name like '15min', 'hourly', etc. or None if unknown.
+    """
+    if "schedule_interval" in info:
+        interval = info["schedule_interval"]
+        interval_map = {
+            900: "15min",
+            1800: "30min",
+            3600: "hourly",
+        }
+        return interval_map.get(interval)
+    
+    if "calendar_interval" in info:
+        cal = info["calendar_interval"]
+        hour = cal.get("Hour")
+        minute = cal.get("Minute", 0)
+        
+        if hour == 2 and minute == 0:
+            return "daily"
+        elif hour == 9 and minute == 0:
+            return "daily_morning"
+        elif hour == 22 and minute == 0:
+            return "daily_evening"
+        # Return a formatted string for other times
+        return f"daily_{hour:02d}:{minute:02d}"
+    
+    return None
+
+
 def describe_schedule(schedule: str) -> str:
     """Describe schedule human-readably."""
-    if schedule == "Enabled (macOS Native)":
-        return "Active (MacOS Native Scheduler)"
-        
-    # Reuse existing description logic
+    # Standard preset names (returned by get_schedule_frequency_name)
+    descriptions = {
+        "15min": "Every 15 minutes",
+        "30min": "Every 30 minutes",
+        "hourly": "Every hour",
+        "daily": "Daily at 2:00 AM",
+        "daily_morning": "Daily at 9:00 AM",
+        "daily_evening": "Daily at 10:00 PM",
+        "custom": "Custom schedule",
+    }
+    
+    if schedule in descriptions:
+        return descriptions[schedule]
+    
+    # Handle custom daily schedules like "daily_09:30"
+    if schedule.startswith("daily_") and ":" in schedule:
+        time_part = schedule.replace("daily_", "")
+        return f"Daily at {time_part}"
+    
+    # Legacy: Check cron expressions
     for name, expr in SCHEDULE_PRESETS.items():
         if schedule == expr:
-            descriptions = {
-                "15min": "Every 15 minutes",
-                "30min": "Every 30 minutes",
-                "hourly": "Every hour",
-                "daily": "Daily at 2:00 AM",
-                "daily_morning": "Daily at 9:00 AM",
-                "daily_evening": "Daily at 10:00 PM",
-            }
             return descriptions.get(name, name)
+    
+    # Legacy "Enabled (macOS Native)" string
+    if schedule == "Enabled (macOS Native)":
+        return "Active (MacOS Native Scheduler)"
             
     return schedule
 

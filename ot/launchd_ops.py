@@ -181,3 +181,38 @@ def remove_agent(label: str) -> bool:
     except OSError as e:
         logger.error(f"❌ Failed to delete plist file: {e}")
         return False
+
+
+def get_agent_schedule_info(label: str) -> dict[str, Any] | None:
+    """Read the plist file and return schedule information.
+    
+    Args:
+        label: Job label.
+        
+    Returns:
+        Dictionary with schedule info, or None if not found.
+        Keys may include:
+        - schedule_interval: Interval in seconds
+        - calendar_interval: Dictionary for specific times
+        - exists: True if the plist exists
+    """
+    plist_path = _get_plist_path(label)
+    
+    if not plist_path.exists():
+        return None
+    
+    try:
+        with open(plist_path, "rb") as f:
+            plist_data = plistlib.load(f)
+        
+        result: dict[str, Any] = {"exists": True}
+        
+        if "StartInterval" in plist_data:
+            result["schedule_interval"] = plist_data["StartInterval"]
+        
+        if "StartCalendarInterval" in plist_data:
+            result["calendar_interval"] = plist_data["StartCalendarInterval"]
+        
+        return result
+    except (OSError, plistlib.InvalidFileException):
+        return None
