@@ -190,6 +190,23 @@ ot schedule set 15min
 
 Logs are stored in `~/.local/share/ot/logs/` with daily rotation.
 
+## Architecture
+
+```mermaid
+graph LR
+    User([User]) -->|1. Edits| Vault["📂 Obsidian Vault\n(Working Directory)"]
+    
+    subgraph "Obsidian Timemachine"
+        direction TB
+        Service[⚙️ Automation Service]
+    end
+    
+    Vault -->|2. Sync| Repo["📦 Git Repository\n(Version Control Dir)"]
+    Service -- Manages Lifecycle --> Repo
+    
+    Repo -->|3. Push| Remote[☁️ GitHub]
+```
+
 ## How It Works
 
 1. **Pull**: Fetch and merge remote changes
