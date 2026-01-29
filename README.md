@@ -16,12 +16,13 @@
 
 ## Features
 
+- **🖥️ Modern TUI**: Clean, interactive menu interface with real-time status updates
 - **🔄 Background Automation**: Runs via Cron without opening Obsidian
 - **☁️ iCloud Compatible**: Smart detection waits for iCloud sync to complete
 - **📦 Dual Modes**: Direct Git mode or Mirror mode (rsync to separate repo)
 - **🔐 Secure**: SSH key-based authentication for GitHub/GitLab
 - **📝 Auto-commit**: Automatic timestamped commits with smart change detection
-- **⏰ Flexible Scheduling**: 15min, 30min, hourly, or daily sync options
+- **⏰ Flexible Scheduling**: Native macOS LaunchAgents (15min, hourly, etc) or standard Cron
 
 ## Requirements
 
@@ -121,9 +122,13 @@ ot menu
 This opens an interactive menu for all operations:
 
 ```
-╔══════════════════════════════════════════════════╗
-║         Obsidian Timemachine - Menu              ║
-╚══════════════════════════════════════════════════╝
+  📊 Current Status:
+     Source: MyVault
+     Repo: obsidian-backup (main)
+     Schedule: Every hour
+     Last Sync: ✅ Changes pushed to remote (15m ago)
+
+  ──────────────────────────────────────────────────
 
   1. 🔄 Run Sync Now
   2. 📋 View Full Status
@@ -205,9 +210,12 @@ ot/
 ├── icloud.py       # iCloud sync detection
 ├── runner.py       # Main sync orchestrator
 ├── ssh.py          # SSH key management
-├── scheduler.py    # Cron job management
+├── scheduler.py    # Scheduler (Cron / LaunchAgents)
+├── launchd_ops.py  # macOS LaunchAgents management
+├── sync_status.py  # Sync status tracking
 └── cli/
     ├── main.py     # CLI entry point
+    ├── menu.py     # Interactive TUI
     └── wizard.py   # Setup wizard
 ```
 
