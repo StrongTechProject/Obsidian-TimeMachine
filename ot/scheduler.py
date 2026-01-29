@@ -133,24 +133,23 @@ def describe_schedule(schedule: str) -> str:
         "custom": "Custom schedule",
     }
     
+    # Generate base description
+    description = schedule
     if schedule in descriptions:
-        return descriptions[schedule]
-    
-    # Handle custom daily schedules like "daily_09:30"
-    if schedule.startswith("daily_") and ":" in schedule:
+        description = descriptions[schedule]
+    elif schedule.startswith("daily_") and ":" in schedule:
         time_part = schedule.replace("daily_", "")
-        return f"Daily at {time_part}"
-    
-    # Legacy: Check cron expressions
-    for name, expr in SCHEDULE_PRESETS.items():
-        if schedule == expr:
-            return descriptions.get(name, name)
+        description = f"Daily at {time_part}"
     
     # Legacy "Enabled (macOS Native)" string
     if schedule == "Enabled (macOS Native)":
         return "Active (MacOS Native Scheduler)"
+    
+    # Append scheduler type for clarity on macOS
+    if sys.platform == "darwin" and "MacOS Native" not in description:
+        description += " (MacOS Native Scheduler)"
             
-    return schedule
+    return description
 
 
 # ============================================================================
