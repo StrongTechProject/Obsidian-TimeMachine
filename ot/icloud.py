@@ -21,6 +21,25 @@ from .logger import get_logger
 UF_COMPRESSED = 0x20
 
 
+def check_brctl_available() -> bool:
+    """Check if brctl command is available on the system.
+    
+    brctl is macOS's official tool for managing CloudDocs/iCloud files.
+    
+    Returns:
+        True if brctl is available, False otherwise.
+    """
+    try:
+        result = subprocess.run(
+            ["which", "brctl"],
+            capture_output=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except (subprocess.SubprocessError, OSError):
+        return False
+
+
 def is_dataless_file(file_path: Path) -> bool:
     """Check if a file is in iCloud "dataless" (evicted) state.
     
@@ -91,42 +110,77 @@ def find_dataless_files(
     return dataless_files
 
 
-def download_dataless_file(file_path: Path, timeout: int = 30) -> bool:
+def download_dataless_file(
+    file_path: Path,
+    timeout: int = 30,
+    verify_wait: float = 0.5,
+    max_verify_attempts: int = 3,
+) -> bool:
     """Trigger download of a single dataless file from iCloud.
     
-    Uses 'cat' to read the file, which forces iCloud to download it.
+    Prefers using macOS's official 'brctl download' command for reliability.
+    Falls back to 'cat' if brctl is not available.
     
     Args:
         file_path: Path to the dataless file.
-        timeout: Maximum seconds to wait for download.
+        timeout: Maximum seconds to wait for download command.
+        verify_wait: Seconds to wait before each verification attempt.
+        max_verify_attempts: Maximum number of verification attempts.
         
     Returns:
         True if file was successfully downloaded, False otherwise.
     """
+    use_brctl = check_brctl_available()
+    
     try:
-        # Reading the file triggers iCloud download
-        result = subprocess.run(
-            ["cat", str(file_path)],
-            capture_output=True,
-            timeout=timeout,
-        )
-        # Check if file is no longer dataless
+        if use_brctl:
+            # Use macOS official brctl command for more reliable downloads
+            subprocess.run(
+                ["brctl", "download", str(file_path)],
+                capture_output=True,
+                timeout=timeout,
+            )
+        else:
+            # Fallback: Reading the file triggers iCloud download
+            subprocess.run(
+                ["cat", str(file_path)],
+                capture_output=True,
+                timeout=timeout,
+            )
+        
+        # iCloud download is async, wait and verify with retries
+        for attempt in range(max_verify_attempts):
+            time.sleep(verify_wait)
+            if not is_dataless_file(file_path):
+                return True
+            # Increase wait time for subsequent attempts
+            verify_wait = min(verify_wait * 1.5, 2.0)
+        
+        # Final check
         return not is_dataless_file(file_path)
+        
     except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
         return False
 
 
 def download_dataless_files(
     directory: Path,
-    max_files: int = 100,
+    max_files: int = 1000,
     timeout_per_file: int = 30,
+    use_batch_mode: bool = True,
+    batch_size: int = 50,
 ) -> tuple[int, int]:
     """Download all dataless files in a directory.
+    
+    Supports both single-file and batch download modes. Batch mode uses
+    brctl with xargs for parallel downloads, which is faster for many files.
     
     Args:
         directory: Directory to search.
         max_files: Maximum number of files to download in one batch.
-        timeout_per_file: Timeout in seconds per file.
+        timeout_per_file: Timeout in seconds per file (single mode only).
+        use_batch_mode: If True, use batch download with brctl + xargs.
+        batch_size: Number of files to download in each batch.
         
     Returns:
         Tuple of (successfully downloaded count, failed count).
@@ -138,36 +192,98 @@ def download_dataless_files(
     if not dataless_files:
         return (0, 0)
     
-    # Limit to prevent excessive wait times
+    total_files = len(dataless_files)
     files_to_download = dataless_files[:max_files]
     
-    if len(dataless_files) > max_files:
+    if total_files > max_files:
         logger.warning(
-            f"⚠️ Found {len(dataless_files)} dataless files, "
+            f"⚠️ Found {total_files} dataless files, "
             f"only downloading first {max_files}"
         )
     
     logger.info(f"☁️ Downloading {len(files_to_download)} dataless files from iCloud...")
     
-    success_count = 0
-    fail_count = 0
-    
-    for i, file_path in enumerate(files_to_download, 1):
-        relative_path = file_path.name
-        if len(relative_path) > 40:
-            relative_path = "..." + relative_path[-37:]
+    # Try batch mode with brctl if available
+    if use_batch_mode and check_brctl_available():
+        logger.info("   Using batch mode with brctl...")
+        success_count, fail_count = _download_batch_brctl(
+            files_to_download, batch_size, logger
+        )
+    else:
+        # Fall back to single-file mode
+        success_count = 0
+        fail_count = 0
         
-        if download_dataless_file(file_path, timeout_per_file):
-            success_count += 1
-            logger.debug(f"   [{i}/{len(files_to_download)}] ✓ {relative_path}")
-        else:
-            fail_count += 1
-            logger.warning(f"   [{i}/{len(files_to_download)}] ✗ {relative_path}")
+        for i, file_path in enumerate(files_to_download, 1):
+            relative_path = file_path.name
+            if len(relative_path) > 40:
+                relative_path = "..." + relative_path[-37:]
+            
+            if download_dataless_file(file_path, timeout_per_file):
+                success_count += 1
+                logger.debug(f"   [{i}/{len(files_to_download)}] ✓ {relative_path}")
+            else:
+                fail_count += 1
+                logger.warning(f"   [{i}/{len(files_to_download)}] ✗ {relative_path}")
     
     if success_count > 0:
         logger.info(f"✅ Downloaded {success_count} files from iCloud")
     if fail_count > 0:
         logger.warning(f"⚠️ Failed to download {fail_count} files")
+    
+    return (success_count, fail_count)
+
+
+def _download_batch_brctl(
+    files: list[Path],
+    batch_size: int,
+    logger,
+) -> tuple[int, int]:
+    """Download files in batches using brctl.
+    
+    Args:
+        files: List of files to download.
+        batch_size: Number of files per batch.
+        logger: Logger instance.
+        
+    Returns:
+        Tuple of (success count, fail count).
+    """
+    total = len(files)
+    success_count = 0
+    fail_count = 0
+    
+    # Process in batches
+    for batch_start in range(0, total, batch_size):
+        batch_end = min(batch_start + batch_size, total)
+        batch = files[batch_start:batch_end]
+        
+        logger.info(f"   Batch {batch_start + 1}-{batch_end}/{total}...")
+        
+        # Trigger downloads for entire batch first
+        for file_path in batch:
+            try:
+                subprocess.run(
+                    ["brctl", "download", str(file_path)],
+                    capture_output=True,
+                    timeout=5,  # Short timeout, just trigger
+                )
+            except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
+                pass
+        
+        # Wait for batch to download
+        time.sleep(2.0)
+        
+        # Verify which files were downloaded
+        for file_path in batch:
+            # Give a bit more time and re-check
+            for _ in range(3):
+                if not is_dataless_file(file_path):
+                    success_count += 1
+                    break
+                time.sleep(0.3)
+            else:
+                fail_count += 1
     
     return (success_count, fail_count)
 
