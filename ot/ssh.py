@@ -241,14 +241,6 @@ def test_ssh_connection(
     """
     logger = get_logger()
     
-    cmd = ["ssh", "-T", f"git@{host}"]
-    
-    env = os.environ.copy()
-    if ssh_key_path:
-        ssh_key_path = Path(ssh_key_path).expanduser().resolve()
-        env["GIT_SSH_COMMAND"] = f"ssh -i {ssh_key_path} -o IdentitiesOnly=yes"
-    
-    # Add StrictHostKeyChecking=accept-new to auto-accept new hosts
     cmd = [
         "ssh", "-T",
         "-o", "StrictHostKeyChecking=accept-new",
@@ -256,6 +248,7 @@ def test_ssh_connection(
     ]
     
     if ssh_key_path:
+        ssh_key_path = Path(ssh_key_path).expanduser().resolve()
         cmd.extend(["-i", str(ssh_key_path), "-o", "IdentitiesOnly=yes"])
     
     cmd.append(f"git@{host}")

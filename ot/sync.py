@@ -130,31 +130,40 @@ def perform_smart_delete(
 ) -> tuple[list[str], list[str]]:
     """Perform smart deletion by checking if missing files exist in Obsidian .trash or system Trash.
     
-    If in .trash / Trash -> User explicitly deleted it in Obsidian, safe to delete from dest.
-    If NOT in trash -> Missing due to iCloud sync/eviction, PRESERVE in dest.
+    Checks missing files in dest against .trash relative paths to safely remove files
+    the user explicitly deleted in Obsidian while protecting files missing due to iCloud eviction.
     
     Returns:
         (deleted_paths, preserved_paths)
     """
     logger = get_logger()
     
-    trash_sources = [
-        source / ".trash",
-        source / ".Trash",
-        Path.home() / ".Trash",
-    ]
+    obsidian_trash_dirs = [source / ".trash", source / ".Trash"]
+    trash_rel_paths: set[Path] = set()
     
-    trash_names = set()
-    for trash_dir in trash_sources:
+    for trash_dir in obsidian_trash_dirs:
         if trash_dir.exists():
             try:
                 for p in trash_dir.rglob("*"):
                     if p.is_file():
-                        trash_names.add(p.name)
-                        trash_names.add(p.stem)
+                        try:
+                            trash_rel_paths.add(p.relative_to(trash_dir))
+                        except ValueError:
+                            pass
             except OSError:
                 pass
                 
+    # System Trash filenames as secondary fallback
+    system_trash = Path.home() / ".Trash"
+    system_trash_files: set[str] = set()
+    if system_trash.exists():
+        try:
+            for p in system_trash.rglob("*"):
+                if p.is_file():
+                    system_trash_files.add(p.name)
+        except OSError:
+            pass
+            
     deleted_paths = []
     preserved_paths = []
     
@@ -180,13 +189,14 @@ def perform_smart_delete(
             
         source_file = source / rel_path
         if not source_file.exists():
-            # File missing in source
-            is_in_trash = (
-                dest_file.name in trash_names or
-                dest_file.stem in trash_names or
-                (source / ".trash" / rel_path).exists() or
-                (source / ".Trash" / rel_path).exists()
+            # Safe check: relative path in trash, or relative parent/name match in obsidian trash
+            is_in_obsidian_trash = (
+                rel_path in trash_rel_paths or
+                any(tp.name == rel_path.name and tp.parent == rel_path.parent for tp in trash_rel_paths)
             )
+            is_in_system_trash = rel_path.name in system_trash_files
+            
+            is_in_trash = is_in_obsidian_trash or is_in_system_trash
             
             if is_in_trash:
                 logger.info(f"🗑️ Smart Delete: Verified deletion in Trash -> removing '{rel_path}'")

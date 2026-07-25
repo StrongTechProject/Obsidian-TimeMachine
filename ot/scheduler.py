@@ -120,9 +120,14 @@ def get_schedule_frequency_name(info: dict) -> str | None:
     return None
 
 
-def describe_schedule(schedule: str) -> str:
-    """Describe schedule human-readably."""
-    # Standard preset names (returned by get_schedule_frequency_name)
+def describe_schedule(schedule: str, include_backend: bool = False) -> str:
+    """Describe schedule human-readably.
+    
+    Args:
+        schedule: Preset key (e.g. '15min') or cron expression (e.g. '*/15 * * * *').
+        include_backend: Whether to append OS backend info.
+    """
+    # Standard preset names
     descriptions = {
         "15min": "Every 15 minutes",
         "30min": "Every 30 minutes",
@@ -133,20 +138,22 @@ def describe_schedule(schedule: str) -> str:
         "custom": "Custom schedule",
     }
     
+    # Reverse mapping for cron expressions
+    cron_to_key = {v: k for k, v in SCHEDULE_PRESETS.items()}
+    key = cron_to_key.get(schedule, schedule)
+    
     # Generate base description
-    description = schedule
-    if schedule in descriptions:
-        description = descriptions[schedule]
-    elif schedule.startswith("daily_") and ":" in schedule:
-        time_part = schedule.replace("daily_", "")
+    if key in descriptions:
+        description = descriptions[key]
+    elif key.startswith("daily_") and ":" in key:
+        time_part = key.replace("daily_", "")
         description = f"Daily at {time_part}"
+    elif schedule == "Enabled (macOS Native)":
+        description = "Active"
+    else:
+        description = schedule
     
-    # Legacy "Enabled (macOS Native)" string
-    if schedule == "Enabled (macOS Native)":
-        return "Active (MacOS Native Scheduler)"
-    
-    # Append scheduler type for clarity on macOS
-    if sys.platform == "darwin" and "MacOS Native" not in description:
+    if include_backend and sys.platform == "darwin":
         description += " (MacOS Native Scheduler)"
             
     return description

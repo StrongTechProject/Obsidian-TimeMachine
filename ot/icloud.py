@@ -11,6 +11,8 @@ from __future__ import annotations
 import os
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -239,7 +241,7 @@ def _download_batch_brctl(
     batch_size: int,
     logger,
 ) -> tuple[int, int]:
-    """Download files in batches using brctl.
+    """Download files in batches using brctl in parallel.
     
     Args:
         files: List of files to download.
@@ -253,6 +255,16 @@ def _download_batch_brctl(
     success_count = 0
     fail_count = 0
     
+    def _trigger_download(f: Path) -> None:
+        try:
+            subprocess.run(
+                ["brctl", "download", str(f)],
+                capture_output=True,
+                timeout=5,
+            )
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
+            pass
+
     # Process in batches
     for batch_start in range(0, total, batch_size):
         batch_end = min(batch_start + batch_size, total)
@@ -260,19 +272,12 @@ def _download_batch_brctl(
         
         logger.info(f"   Batch {batch_start + 1}-{batch_end}/{total}...")
         
-        # Trigger downloads for entire batch first
-        for file_path in batch:
-            try:
-                subprocess.run(
-                    ["brctl", "download", str(file_path)],
-                    capture_output=True,
-                    timeout=5,  # Short timeout, just trigger
-                )
-            except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
-                pass
+        # Parallel trigger downloads for entire batch using ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(len(batch), 16)) as executor:
+            executor.map(_trigger_download, batch)
         
         # Wait for batch to download
-        time.sleep(2.0)
+        time.sleep(1.5)
         
         # Verify which files were downloaded
         for file_path in batch:
@@ -356,6 +361,74 @@ def find_recently_modified_files(
     return recent_files
 
 
+@dataclass
+class iCloudStatus:
+    """Status metrics collected during directory scan."""
+    placeholders: list[Path]
+    dataless_files: list[Path]
+    recent_files: list[Path]
+
+
+def scan_icloud_status(
+    directory: Path,
+    recent_seconds: int = 5,
+    exclude_patterns: list[str] | None = None,
+) -> iCloudStatus:
+    """Perform a single-pass scan of the directory to collect all iCloud & file stability metrics.
+    
+    Args:
+        directory: Directory to scan recursively.
+        recent_seconds: Time window in seconds for recently modified files.
+        exclude_patterns: Filename patterns to exclude.
+        
+    Returns:
+        iCloudStatus containing placeholders, dataless files, and recently modified files.
+    """
+    directory = Path(directory).expanduser().resolve()
+    exclude_patterns = exclude_patterns or [".DS_Store"]
+    
+    placeholders: list[Path] = []
+    dataless_files: list[Path] = []
+    recent_files: list[Path] = []
+    
+    if not directory.exists():
+        return iCloudStatus(placeholders, dataless_files, recent_files)
+        
+    cutoff_time = datetime.now() - timedelta(seconds=recent_seconds)
+    
+    try:
+        for file_path in directory.rglob("*"):
+            if not file_path.is_file():
+                continue
+                
+            name = file_path.name
+            
+            # 1. Check placeholders
+            if name.endswith(".icloud"):
+                placeholders.append(file_path)
+                continue
+                
+            # Exclude patterns check for dataless and mtime checks
+            if any(pattern in name for pattern in exclude_patterns):
+                continue
+                
+            # 2. Check dataless files
+            if is_dataless_file(file_path):
+                dataless_files.append(file_path)
+                
+            # 3. Check recent modifications
+            try:
+                mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
+                if mtime > cutoff_time:
+                    recent_files.append(file_path)
+            except OSError:
+                pass
+    except OSError:
+        pass
+        
+    return iCloudStatus(placeholders, dataless_files, recent_files)
+
+
 def wait_for_icloud_sync(
     source_dir: Path,
     max_wait_seconds: int = 60,
@@ -363,25 +436,12 @@ def wait_for_icloud_sync(
     stability_threshold: int = 2,
     download_dataless: bool = True,
 ) -> bool:
-    """Wait for iCloud to finish syncing files.
+    """Wait for iCloud to finish syncing files (optimized with single-pass scanning).
     
-    This function checks for three conditions:
-    1. No .icloud placeholder files (all files downloaded - legacy format)
-    2. No dataless files (all files downloaded - modern format)
-    3. No recently modified files (sync activity has stopped)
-    
-    If dataless files are found, it will attempt to trigger their download
-    from iCloud before proceeding.
-    
-    Args:
-        source_dir: Source directory to monitor.
-        max_wait_seconds: Maximum time to wait in seconds.
-        check_interval: Time between checks in seconds.
-        stability_threshold: Number of consecutive stable checks required.
-        download_dataless: Whether to automatically download dataless files.
-        
-    Returns:
-        True if sync completed within timeout, False if timed out.
+    Checks for three conditions:
+    1. No .icloud placeholder files
+    2. No dataless files
+    3. No recently modified files
     """
     logger = get_logger()
     source_dir = Path(source_dir).expanduser().resolve()
@@ -402,24 +462,24 @@ def wait_for_icloud_sync(
             )
             return False
         
-        # Check for .icloud placeholder files (legacy format)
-        placeholders = find_icloud_placeholders(source_dir)
-        if placeholders:
+        # Single-pass scan replaces 3 separate directory traversals
+        status = scan_icloud_status(source_dir, recent_seconds=5)
+        
+        # 1. Check for .icloud placeholder files
+        if status.placeholders:
             logger.info(
                 f"   Waiting for iCloud downloads... "
-                f"({len(placeholders)} .icloud files pending, {elapsed:.0f}s elapsed)"
+                f"({len(status.placeholders)} .icloud files pending, {elapsed:.0f}s elapsed)"
             )
             stable_count = 0
             time.sleep(check_interval)
             continue
         
-        # Check for dataless files (modern format)
-        dataless_files = find_dataless_files(source_dir)
-        if dataless_files:
+        # 2. Check for dataless files
+        if status.dataless_files:
             if download_dataless and not dataless_download_attempted:
-                # Attempt to download dataless files
                 logger.info(
-                    f"   Found {len(dataless_files)} dataless files, "
+                    f"   Found {len(status.dataless_files)} dataless files, "
                     "triggering iCloud download..."
                 )
                 download_dataless_files(source_dir)
@@ -428,22 +488,18 @@ def wait_for_icloud_sync(
                 time.sleep(check_interval)
                 continue
             else:
-                # Already attempted download or download disabled
-                remaining = find_dataless_files(source_dir)
+                remaining = status.dataless_files
                 if remaining:
                     logger.warning(
                         f"⚠️ {len(remaining)} dataless files could not be downloaded. "
                         "These may cause rsync errors."
                     )
-                    # Don't block forever on dataless files, just warn
-                    # Fall through to stability check
         
-        # Check for recently modified files
-        recent_files = find_recently_modified_files(source_dir, seconds=5)
-        if recent_files:
+        # 3. Check for recently modified files
+        if status.recent_files:
             logger.info(
                 f"   Waiting for file stability... "
-                f"({len(recent_files)} files recently modified)"
+                f"({len(status.recent_files)} files recently modified)"
             )
             stable_count = 0
             time.sleep(check_interval)
@@ -454,8 +510,6 @@ def wait_for_icloud_sync(
         
         if stable_count >= stability_threshold:
             logger.info("✅ iCloud sync appears complete. Files are stable.")
-            
-            # Extra safety delay for file system to settle
             time.sleep(1)
             return True
         
