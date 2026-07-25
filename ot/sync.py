@@ -105,7 +105,7 @@ def build_rsync_command(
         cmd.append("--delete")
     
     # Default exclusions
-    default_excludes = [".git", ".DS_Store", ".trash", ".Trash", "*.icloud"]
+    default_excludes = [".git", ".DS_Store", ".trash", ".Trash", "*.icloud", ".*.icloud"]
     exclude_patterns = exclude_patterns or []
     all_excludes = default_excludes + exclude_patterns
     
@@ -121,6 +121,87 @@ def build_rsync_command(
     cmd.extend([source_str, str(dest)])
     
     return cmd
+
+
+def perform_smart_delete(
+    source: Path,
+    dest: Path,
+    exclude_patterns: list[str] | None = None,
+) -> tuple[list[str], list[str]]:
+    """Perform smart deletion by checking if missing files exist in Obsidian .trash or system Trash.
+    
+    If in .trash / Trash -> User explicitly deleted it in Obsidian, safe to delete from dest.
+    If NOT in trash -> Missing due to iCloud sync/eviction, PRESERVE in dest.
+    
+    Returns:
+        (deleted_paths, preserved_paths)
+    """
+    logger = get_logger()
+    
+    trash_sources = [
+        source / ".trash",
+        source / ".Trash",
+        Path.home() / ".Trash",
+    ]
+    
+    trash_names = set()
+    for trash_dir in trash_sources:
+        if trash_dir.exists():
+            try:
+                for p in trash_dir.rglob("*"):
+                    if p.is_file():
+                        trash_names.add(p.name)
+                        trash_names.add(p.stem)
+            except OSError:
+                pass
+                
+    deleted_paths = []
+    preserved_paths = []
+    
+    try:
+        dest_files = list(dest.rglob("*"))
+    except OSError:
+        dest_files = []
+        
+    for dest_file in dest_files:
+        if not dest_file.is_file():
+            continue
+            
+        try:
+            rel_path = dest_file.relative_to(dest)
+        except ValueError:
+            continue
+            
+        parts = rel_path.parts
+        if any(p in {".git", ".trash", ".Trash"} for p in parts):
+            continue
+        if dest_file.name == ".DS_Store" or dest_file.name.endswith(".icloud"):
+            continue
+            
+        source_file = source / rel_path
+        if not source_file.exists():
+            # File missing in source
+            is_in_trash = (
+                dest_file.name in trash_names or
+                dest_file.stem in trash_names or
+                (source / ".trash" / rel_path).exists() or
+                (source / ".Trash" / rel_path).exists()
+            )
+            
+            if is_in_trash:
+                logger.info(f"🗑️ Smart Delete: Verified deletion in Trash -> removing '{rel_path}'")
+                try:
+                    dest_file.unlink()
+                    deleted_paths.append(str(rel_path))
+                except OSError as e:
+                    logger.error(f"Failed to delete '{rel_path}': {e}")
+            else:
+                logger.warning(
+                    f"🛡️ Smart Protection: '{rel_path}' missing from iCloud but NOT in Trash -> preserving in destination"
+                )
+                preserved_paths.append(str(rel_path))
+                
+    return deleted_paths, preserved_paths
 
 
 def run_rsync(
@@ -164,24 +245,22 @@ def run_rsync(
     if use_iconv:
         logger.debug("rsync iconv support detected; enabling filename normalization.")
     
-    # Build command
+    # Build command: Use rsync without --delete, smart delete will handle verification via .trash
     cmd = build_rsync_command(
         source=source,
         dest=dest,
         exclude_patterns=exclude_patterns,
         use_iconv=use_iconv,
-        delete=delete,
+        delete=False,
         dry_run=dry_run,
     )
     
     logger.info(f"📂 Starting rsync: {source} → {dest}")
+    if delete:
+        logger.info("🧠 Smart Delete enabled: Verifying missing files against Obsidian .trash...")
+    else:
+        logger.info("⚠️ Running without delete protection. Source deletions will be ignored.")
     logger.debug(f"Command: {' '.join(cmd)}")
-    
-    if not delete:
-        logger.info(
-            "⚠️ Running without --delete to protect Git repository. "
-            "Deleted files in source will remain in destination."
-        )
     
     MAX_RETRIES = 3
     RETRY_DELAY = 5
@@ -210,6 +289,14 @@ def run_rsync(
                     logger.info("✅ Rsync succeeded after retry.")
                 else:
                     logger.info("✅ Rsync completed successfully.")
+                
+                # Perform Smart Delete check if delete is enabled and not dry_run
+                if delete and not dry_run:
+                    deleted, preserved = perform_smart_delete(source, dest, exclude_patterns)
+                    if deleted:
+                        logger.info(f"🗑️ Smart Delete: Cleaned up {len(deleted)} files confirmed in Trash.")
+                    if preserved:
+                        logger.info(f"🛡️ Smart Protection: Preserved {len(preserved)} missing files not in Trash.")
                     
                 return RsyncResult(
                     success=True,
